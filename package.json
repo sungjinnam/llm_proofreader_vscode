@@ -1,0 +1,66 @@
+{
+  "name": "llm_proofreader",
+  "displayName": "VS Code Assistant Azure",
+  "description": "AI-powered code assistant using Azure",
+  "version": "0.0.1",
+  "publisher": "your-publisher-name",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "extension.assistCode",
+        "title": "Assist Code"
+      },
+      {
+        "command": "extension.assistGrammar",
+        "title": "Assist Grammar"
+      }
+    ],
+    "configuration": {
+      "title": "llm_proofreader",
+      "properties": {
+        "aiAssistant.apiProvider": {
+          "type": "string",
+          "enum": [
+            "azure",
+            "openai",
+            "anthropic"
+          ],
+          "default": "anthropic",
+          "description": "Select the AI provider to use"
+        },
+        "aiAssistant.anthropic.apiKey": {
+          "type": "string",
+          "description": "API key for Anthropic"
+        },
+        "aiAssistant.anthropic.model": {
+          "type": "string",
+          "default": "claude-3-sonnet-20240229",
+          "description": "Anthropic model to use"
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "@azure/core-auth": "^1.7.2",
+    "@azure/openai": "^2.0.0-beta.2",
+    "@types/mocha": "^10.0.9",
+    "openai": "^4.58.2"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.6.3"
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile"
+  }
+}

@@ -41,10 +41,11 @@ async function getAnthropicApiKey(context: vscode.ExtensionContext): Promise<str
 export class AIService {
     private anthropicClient: Anthropic | null = null;
     private context: vscode.ExtensionContext;
+    private initializationPromise: Promise<void>;
 
     constructor(context: vscode.ExtensionContext) {
         this.context = context;
-        this.initializeClient();
+        this.initializationPromise = this.initializeClient();
     }
 
     private async initializeClient() {
@@ -60,14 +61,17 @@ export class AIService {
     }
 
     async generateCompletion(prompt: string): Promise<string> {
+        // Wait for initialization to complete before proceeding
+        await this.initializationPromise;        
         if (!this.anthropicClient) {
             throw new Error('AI service is not properly configured');
         }
 
         const config = vscode.workspace.getConfiguration('aiAssistant');
+        
+        // TODO: add supports for smaller local models
         const model = config.get<string>('anthropic.model') || 'claude-3-5-haiku-20241022';
 
-        // TODO: try with smaller local model
         // TODO: include explanations tag/output
         const response = await this.anthropicClient.messages.create({
             model: model,
@@ -81,13 +85,5 @@ export class AIService {
             return response.content[0].text;
         }
         throw new Error('Unexpected response format');
-
-        // // https://github.com/anthropics/anthropic-sdk-typescript/issues/432#issue-2327765528
-        // const text = (response.content[0] as Anthropic.TextBlock).text;
-        // return text
-        // // Check if the content block is a text block
-        // // return response.content[0].text;
-
-        // TODO: extension gives an error in initial attempt (Error generating markdown assistance: Error: AI service is not properly configured). successful in the second attempt
     }
 }

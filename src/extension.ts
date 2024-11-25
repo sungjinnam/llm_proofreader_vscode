@@ -253,7 +253,7 @@ export function activate(context: vscode.ExtensionContext) {
 
     // Register code action provider
     const codeActionProvider = vscode.languages.registerCodeActionsProvider(
-        '*', // or specific language identifiers
+        { scheme: 'file', language: '*' }, // specify scheme and language
         {
             provideCodeActions(document, range, context, token) {
                 const diagnostics = context.diagnostics;

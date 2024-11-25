@@ -10,57 +10,114 @@ export function activate(context: vscode.ExtensionContext) {
     // This line of code will only be executed once when your extension is activated
     console.log('Congratulations, your extension "llm_proofreader" is now active!');
 
-    // // The command has been defined in the package.json file
-    // // Now provide the implementation of the command with registerCommand
-    // // The commandId parameter must match the command field in package.json
-    // const disposable = vscode.commands.registerCommand('llm_proofreader.helloWorld', () => {
-    //     // The code you place here will be executed every time your command is executed
-    //     // Display a message box to the user
-    //     vscode.window.showInformationMessage('Hello World from vscode_assistant_azure!');
-    
     // Singleton instance
-    let aiServiceInstance: AIService | undefined;
-    // Helper function to get or create AIService
-    const getAIService = async (): Promise<AIService> => {
-        if(!aiServiceInstance) {
-            aiServiceInstance = new AIService(context);
-        }
-        return aiServiceInstance
-    }
+    const aiService = new AIService(context);
+    // Create diagnostic collection
+    const diagnosticCollection = vscode.languages.createDiagnosticCollection('grammarCheck');
+    // Clear any existing diagnostics before starting new evaluation
+    diagnosticCollection.clear();
 
-    let assistCode = vscode.commands.registerCommand('extension.assistCode', async () => {
-        const aiService = await getAIService();
-        const editor = vscode.window.activeTextEditor;
-        if (editor) {
-            const document = editor.document;
-            const selection = editor.selection;
-            const text = document.getText(selection);
-
-            const prompt = `Assist with the following code:\n\n${text}\n\nProvide suggestions or improvements:`;
+    // Register command to apply fixes
+    let disposableGrammarFix = vscode.commands.registerCommand('extension.applyGrammarFix', async (args) => {
+        console.log('Received args:', args);
+        
+        const range = new vscode.Range(
+            new vscode.Position(args.range.start.line, args.range.start.character),
+            new vscode.Position(args.range.end.line, args.range.end.character)
+        );
+        
+        const edit = new vscode.WorkspaceEdit();
+        edit.replace(vscode.Uri.parse(args.document.uri), range, args.replacement);
+        
+        const success = await vscode.workspace.applyEdit(edit);
+        console.log('Edit applied:', success);
+        
+        if (success) {
+            // Calculate the position shift
+            const lengthDiff = args.replacement.length - (range.end.character - range.start.character);
             
-            try {
-                const result = await aiService.generateCompletion(prompt);
-                const newDoc = await vscode.workspace.openTextDocument({ content: result, language: 'markdown' });
-                vscode.window.showTextDocument(newDoc, vscode.ViewColumn.Beside);
-            } catch (error) {
-                vscode.window.showErrorMessage('Error generating code assistance: ' + error);
-            }
+            // Get current diagnostics
+            const currentDiagnostics = diagnosticCollection.get(vscode.Uri.parse(args.document.uri)) || [];
+            
+            // Filter and adjust remaining diagnostics
+            const remainingDiagnostics = currentDiagnostics.map(diagnostic => {
+                const diagnosticRange = diagnostic.range;
+                
+                // Skip if this is the diagnostic we just fixed
+                if (diagnosticRange.start.line === range.start.line &&
+                    diagnosticRange.start.character === range.start.character &&
+                    diagnosticRange.end.line === range.end.line &&
+                    diagnosticRange.end.character === range.end.character) {
+                    return null;
+                }
+                
+                // Adjust positions for diagnostics on the same line after the edit
+                if (diagnosticRange.start.line === range.start.line && 
+                    diagnosticRange.start.character > range.start.character) {
+                    const newStart = new vscode.Position(
+                        diagnosticRange.start.line,
+                        diagnosticRange.start.character + lengthDiff
+                    );
+                    const newEnd = new vscode.Position(
+                        diagnosticRange.end.line,
+                        diagnosticRange.end.character + lengthDiff
+                    );
+                    
+                    // Create a new diagnostic with adjusted range
+                    const newDiagnostic = new vscode.Diagnostic(
+                        new vscode.Range(newStart, newEnd),
+                        diagnostic.message,
+                        diagnostic.severity
+                    );
+                    newDiagnostic.source = diagnostic.source;
+                    // Adjust the command arguments in diagnostic.code
+                    if (diagnostic.code && typeof diagnostic.code === 'object') {
+                        try {
+                            // Clean up the query string before parsing
+                            const query = diagnostic.code.target.query.replace(/^\?/, '');
+                            const commandArgs = JSON.parse(decodeURIComponent(query));
+                            
+                            // Adjust the positions
+                            commandArgs.range.start.character += lengthDiff;
+                            commandArgs.range.end.character += lengthDiff;
+                            
+                            newDiagnostic.code = {
+                                value: 'Apply Suggestion',
+                                target: vscode.Uri.parse(`command:extension.applyGrammarFix?${encodeURIComponent(JSON.stringify(commandArgs))}`)
+                            };
+                        } catch (error) {
+                            console.error('Error parsing diagnostic code:', error);
+                            // If we can't parse the code, keep the original
+                            newDiagnostic.code = diagnostic.code;
+                        }
+                    }
+                    
+                    return newDiagnostic;
+                }
+                
+                return diagnostic;
+            }).filter((diagnostic): diagnostic is vscode.Diagnostic => diagnostic !== null);
+            
+            // Update diagnostics with remaining ones
+            diagnosticCollection.set(vscode.Uri.parse(args.document.uri), remainingDiagnostics);
         }
     });
+    context.subscriptions.push(disposableGrammarFix);
 
     let assistGrammar = vscode.commands.registerCommand('extension.assistGrammar', async () => {
-        const aiService = await getAIService();
+
+        // const aiService = getAIService();
         const editor = vscode.window.activeTextEditor;
 
-        // Create diagnostic collection
-        const diagnosticCollection = vscode.languages.createDiagnosticCollection('grammarCheck');
-        
-        if (!editor) {
+        if (!aiService) {
+            vscode.window.showErrorMessage('No AIService is actived');
+            return;
+        }
+        else if (!editor) {
             vscode.window.showErrorMessage('No active editor found');
             return;
         } else {
-            // Clear any existing diagnostics before starting new evaluation
-            diagnosticCollection.clear();
+
 
             const document = editor.document;
             const selection = editor.selection;
@@ -88,8 +145,6 @@ export function activate(context: vscode.ExtensionContext) {
             try {
                 const result = await aiService.generateCompletion(prompt);
                 console.log('initial LLM output: %s', result);
-                //     const newDoc = await vscode.workspace.openTextDocument({ content: result, language: 'markdown' });
-                //     vscode.window.showTextDocument(newDoc, vscode.ViewColumn.Beside);
                     
                 // Parse edits from the result
                 // const edits = parseEdits(result);
@@ -98,9 +153,9 @@ export function activate(context: vscode.ExtensionContext) {
                 console.log('parsed output: %s', edits);
 
                 // Create diagnostics for each edit
-                // TODO: shift in subsequent suggestions' position. e.g., suggestions with insert -> should shift the rage info for the later suggestions.
                 if (edits && edits.length > 0) {                
                     // Create diagnostics for all edits at once
+                    // In assistGrammar where we create the diagnostics:
                     const diagnostics = edits.map(edit => {
                         const diagnostic = new vscode.Diagnostic(
                             edit.range,
@@ -109,24 +164,26 @@ export function activate(context: vscode.ExtensionContext) {
                         );
                         
                         diagnostic.source = 'Grammar Assistant';
-                        // Create a simple object with just the necessary data
                         const commandArgs = {
+                            document: {
+                                uri: document.uri.toString() // Convert URI to string
+                            },
                             replacement: edit.replacement,
                             range: {
                                 start: {
-                                    line: edit.range.start.line, 
+                                    line: edit.range.start.line,
                                     character: edit.range.start.character
                                 },
                                 end: {
-                                    line: edit.range.end.line, 
+                                    line: edit.range.end.line,
                                     character: edit.range.end.character
                                 }
                             }
                         };
-                        // Create the command directly in the diagnostic
+
                         diagnostic.code = {
                             value: 'Apply Suggestion',
-                            target: vscode.Uri.parse(`command:extension.applyGrammarFix?${encodeURIComponent(JSON.stringify([commandArgs]))}`)
+                            target: vscode.Uri.parse(`command:extension.applyGrammarFix?${encodeURIComponent(JSON.stringify(commandArgs))}`)
                         };
 
                         return diagnostic;
@@ -139,68 +196,13 @@ export function activate(context: vscode.ExtensionContext) {
                     diagnosticCollection.clear();
                     vscode.window.showInformationMessage('No suggestions found for the selected text.');
                 }
-                // Register command to apply fixes
-                let disposable = vscode.commands.registerCommand('extension.applyGrammarFix', async (args) => {
-                    const commandArgs = Array.isArray(args) ? args[0] : args;
-                    
-                    const range = new vscode.Range(
-                        new vscode.Position(commandArgs.range.start.line, commandArgs.range.start.character),
-                        new vscode.Position(commandArgs.range.end.line, commandArgs.range.end.character)
-                    );
-                    
-                    const edit = new vscode.WorkspaceEdit();
-                    edit.replace(document.uri, range, commandArgs.replacement);
-                    await vscode.workspace.applyEdit(edit);
-
-                    // Get current diagnostics
-                    const currentDiagnostics = diagnosticCollection.get(document.uri) || [];
-                    
-                    // Calculate position shift
-                    const lengthDiff = commandArgs.replacement.length - (range.end.character - range.start.character);
-                    
-                    // Update remaining diagnostics with new positions
-                    const updatedDiagnostics = currentDiagnostics
-                        .filter(d => {
-                            // Remove diagnostics that overlap with the applied edit
-                            return !(d.range.start.line === range.start.line &&
-                                d.range.end.line === range.end.line &&
-                                d.range.start.character === range.start.character &&
-                                d.range.end.character === range.end.character);
-                        })
-                        .map(d => {
-                            // Only adjust positions if the diagnostic comes after the edit
-                            if (d.range.start.line === range.start.line && d.range.start.character > range.start.character) {
-                                // Adjust the position on the same line
-                                const newRange = new vscode.Range(
-                                    new vscode.Position(d.range.start.line, d.range.start.character + lengthDiff),
-                                    new vscode.Position(d.range.end.line, d.range.end.character + lengthDiff)
-                                );
-                                
-                                const newDiagnostic = new vscode.Diagnostic(
-                                    newRange,
-                                    d.message,
-                                    d.severity
-                                );
-                                
-                                newDiagnostic.source = d.source;
-                                newDiagnostic.code = d.code;
-                                
-                                return newDiagnostic;
-                            }
-                            return d;
-                        });
-
-                    // Update diagnostics collection
-                    diagnosticCollection.set(document.uri, updatedDiagnostics);
-                });
-                context.subscriptions.push(disposable);          
             } catch (error) {
                 vscode.window.showErrorMessage('Error generating markdown assistance: ' + error);
             }            
         }
     });
     
-    context.subscriptions.push(assistCode, assistGrammar);
+    context.subscriptions.push(assistGrammar);
 
     // Helper function to parse edits from LLM response
     function parseEdits(
@@ -265,11 +267,9 @@ export function activate(context: vscode.ExtensionContext) {
                         );
                         if (diagnostic.code && typeof diagnostic.code === 'object') {
                             try {
-                                const params = JSON.parse(
-                                    decodeURIComponent(
-                                        diagnostic.code.target.query
-                                    )
-                                );
+                                // Clean up the query string before parsing
+                                const query = diagnostic.code.target.query.replace(/^\?/, '');
+                                const params = JSON.parse(decodeURIComponent(query));
                                 
                                 action.command = {
                                     command: 'extension.applyGrammarFix',

@@ -39,6 +39,11 @@
           "type": "string",
           "default": "claude-3-sonnet-20240229",
           "description": "Anthropic model to use"
+        },
+        "aiAssistant.ollama.model": {
+          "type": "string",
+          "default": "llama3.2:1b",
+          "description": "Ollama model to use"
         }
       }
     }

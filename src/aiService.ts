@@ -1,5 +1,5 @@
 import * as vscode from 'vscode';
-import Anthropic from '@anthropic-ai/sdk';
+// import Anthropic from '@anthropic-ai/sdk';
 
 // function getAnthropicApiKey(): Promise<string | undefined> {
 //     // Option 0: fetch from the config
@@ -19,71 +19,99 @@ import Anthropic from '@anthropic-ai/sdk';
 //     // });
 // }
 
-async function getAnthropicApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
-    const secretStorage = context.secrets;
-    let apiKey = await secretStorage.get('anthropic-api-key');
-    if (!apiKey) {
-        // Prompt user to enter key if not found
-        apiKey = await vscode.window.showInputBox({
-            prompt: 'Please enter your Anthropic API Key',
-            password: true // Masks the input
-        });
+// async function getAnthropicApiKey(context: vscode.ExtensionContext): Promise<string | undefined> {
+//     const secretStorage = context.secrets;
+//     let apiKey = await secretStorage.get('anthropic-api-key');
+//     if (!apiKey) {
+//         // Prompt user to enter key if not found
+//         apiKey = await vscode.window.showInputBox({
+//             prompt: 'Please enter your Anthropic API Key',
+//             password: true // Masks the input
+//         });
         
-        if (apiKey) {
-            // Save the key securely
-            await secretStorage.store('anthropic-api-key', apiKey);
-        }
-    }
+//         if (apiKey) {
+//             // Save the key securely
+//             await secretStorage.store('anthropic-api-key', apiKey);
+//         }
+//     }
     
-    return apiKey;
-}
+//     return apiKey;
+// }
 
 export class AIService {
-    private anthropicClient: Anthropic | null = null;
+    // private anthropicClient: Anthropic | null = null;
     private context: vscode.ExtensionContext;
-    private initializationPromise: Promise<void>;
+    // private initializationPromise: Promise<void>;
 
     constructor(context: vscode.ExtensionContext) {
         this.context = context;
-        this.initializationPromise = this.initializeClient();
+        // this.initializationPromise = this.initializeClient();
     }
 
-    private async initializeClient() {
-        const config = vscode.workspace.getConfiguration('aiAssistant');
-        // const apiKey = config.get<string>('anthropic.apiKey');
-        const apiKey = await getAnthropicApiKey(this.context);
+    // private async initializeClient() {
+    //     const config = vscode.workspace.getConfiguration('aiAssistant');
+    //     // const apiKey = config.get<string>('anthropic.apiKey');
+    //     const apiKey = await getAnthropicApiKey(this.context);
 
-        if (apiKey) {
-            this.anthropicClient = new Anthropic({ apiKey });
-        } else {
-            throw new Error('Anthropic API key is not configured');
-        }
-    }
+    //     if (apiKey) {
+    //         this.anthropicClient = new Anthropic({ apiKey });
+    //     } else {
+    //         throw new Error('Anthropic API key is not configured');
+    //     }
+    // }
 
     async generateCompletion(prompt: string): Promise<string> {
         // Wait for initialization to complete before proceeding
-        await this.initializationPromise;        
-        if (!this.anthropicClient) {
-            throw new Error('AI service is not properly configured');
-        }
+        // await this.initializationPromise;
+        // if (!this.anthropicClient) {
+        //     throw new Error('AI service is not properly configured');
+        // }
 
         const config = vscode.workspace.getConfiguration('aiAssistant');
         
-        // TODO: add supports for smaller local models
-        const model = config.get<string>('anthropic.model') || 'claude-3-5-haiku-20241022';
+        // TODO: add supports for smaller local models and test the prompt
+        // const model = config.get<string>('anthropic.model') || 'claude-3-5-haiku-20241022';
+        const model = config.get<string>('ollama.model');
+        const baseUrl = "http://localhost:11434/api/generate"
+        // // TODO: include explanations tag/output
+        // const response = await this.anthropicClient.messages.create({
+        //     model: model,
+        //     max_tokens: 1024,
+        //     system: 'You are a helpful writing assistant. Be concise and focus on grammar, clarity, and flow. If there are no suggestions, do not change anything. Always wrap original text with <orig></orig> (non-empty) and each suggested change with <edit></edit> tag. One <orig></orig> tag and one <edit></edit> tag should be always paired togather. Do not include any other text.\n\nFor example, `this is test sentenec` -> `<orig>this</orig><edit>This</edit> is <orig>test</orig><edit>a test</edit> <orig>sentenec</orig><edit>sentence.</edit>',
+        //     messages: [
+        //         { role: 'user', content: prompt }
+        //     ]
+        // });
+        // if ('text' in response.content[0]) {
+        //     return response.content[0].text;
+        // }
+        // throw new Error('Unexpected response format');
+        try {
+            const response = await fetch(baseUrl, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({
+                    model: model,
+                    system: `You are a simple grammar checker. Be concise and focus on grammar, clarity, and flow. Do not include any other text. Always return the output in a JSON format following {'original': <original sentence in verbatim>, 'fixed': <grammar fixed output>}.`,
+                    prompt: prompt,
+                    format: "json",
+                    stream: false
+                })
+            });
 
-        // TODO: include explanations tag/output
-        const response = await this.anthropicClient.messages.create({
-            model: model,
-            max_tokens: 1024,
-            system: 'You are a helpful writing assistant. Be concise and focus on grammar, clarity, and flow. If there are no suggestions, do not change anything. Always wrap original text with <orig></orig> (non-empty) and each suggested change with <edit></edit> tag. One <orig></orig> tag and one <edit></edit> tag should be always paired togather. Do not include any other text.\n\nFor example, `this is test sentenec` -> `<orig>this</orig><edit>This</edit> is <orig>test</orig><edit>a test</edit> <orig>sentenec</orig><edit>sentence.</edit>',
-            messages: [
-                { role: 'user', content: prompt }
-            ]
-        });
-        if ('text' in response.content[0]) {
-            return response.content[0].text;
+            if (!response.ok) {
+                throw new Error(`Ollama API error: ${response.statusText}`);
+            }
+
+            interface OllamaResponse {
+                response: string;
+            }
+            const data = await response.json() as OllamaResponse;
+            return data.response;
+        } catch (error) {
+            throw new Error(`Failed to generate completion: ${error}`);
         }
-        throw new Error('Unexpected response format');
     }
 }

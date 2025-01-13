@@ -204,7 +204,53 @@ export function activate(context: vscode.ExtensionContext) {
     
     context.subscriptions.push(assistGrammar);
 
+    // TODO: instead of LLM to parse the original and edits with arbitrary tags, let LLM to succintly return the edited text only and the app handles the edit parsing? e.g., using diff. This might be a better way to use with smaller LLM. 
     // Helper function to parse edits from LLM response
+    // function parseEdits(
+    //     result: string, 
+    //     fullText: string, 
+    //     document: vscode.TextDocument, 
+    //     range: vscode.Range
+    // ): Array<{
+    //     original: string;
+    //     suggestion: string;
+    //     replacement: string;
+    //     range: vscode.Range;
+    // }> {
+    //     const regex = /<orig>(.*?)<\/orig>.*?<edit>(.*?)<\/edit>/gs;
+    //     const matches = [...result.matchAll(regex)];
+    //     console.log('parsed output:', matches);
+        
+    //     return matches.map(match => {
+    //         const original = match[1];
+    //         const replacement = match[2];
+            
+    //         // Skip if the replacement is identical to the original
+    //         if (original == replacement) {
+    //             return null;
+    //         }            
+    //         // Find position of original text in the full text
+    //         const startIndex = fullText.indexOf(original);
+    //         if (startIndex === -1) {
+    //             return null;
+    //         }
+            
+    //         // Calculate start and end positions
+    //         const startPos = document.positionAt(document.offsetAt(range.start) + startIndex);
+    //         const endPos = document.positionAt(document.offsetAt(range.start) + startIndex + original.length);
+            
+    //         return {
+    //             original,
+    //             suggestion: `Change "${original}" to "${replacement}"`,
+    //             replacement,
+    //             range: new vscode.Range(startPos, endPos)
+    //         };
+    //     })
+    //     .filter((edit): edit is NonNullable<typeof edit> => 
+    //         edit !== null && 
+    //         edit.original !== edit.replacement
+    //     );
+    // }
     function parseEdits(
         result: string, 
         fullText: string, 
@@ -216,41 +262,124 @@ export function activate(context: vscode.ExtensionContext) {
         replacement: string;
         range: vscode.Range;
     }> {
-        const regex = /<orig>(.*?)<\/orig>.*?<edit>(.*?)<\/edit>/gs;
-        const matches = [...result.matchAll(regex)];
-        console.log('parsed output:', matches);
-        
-        return matches.map(match => {
-            const original = match[1];
-            const replacement = match[2];
+        try {
+            const parsed = JSON.parse(result);
+            const original = parsed.original;
+            const fixed = parsed.fixed;
             
-            // Skip if the replacement is identical to the original
-            if (original == replacement) {
-                return null;
-            }            
-            // Find position of original text in the full text
-            const startIndex = fullText.indexOf(original);
-            if (startIndex === -1) {
-                return null;
+            // Split into tokens
+            const originalTokens = original.match(/\S+|\s+|[.,!?;]/g) || [];
+            const fixedTokens = fixed.match(/\S+|\s+|[.,!?;]/g) || [];
+            
+            console.log('Original tokens:', originalTokens);
+            console.log('Fixed tokens:', fixedTokens);
+            
+            const edits = [];
+            let currentPosition = 0;
+            let i = 0, j = 0;
+            
+            while (i < originalTokens.length || j < fixedTokens.length) {
+                // Skip matching whitespace
+                if (i < originalTokens.length && j < fixedTokens.length && 
+                    originalTokens[i] === fixedTokens[j] && /^\s+$/.test(originalTokens[i])) {
+                    currentPosition += originalTokens[i].length;
+                    i++;
+                    j++;
+                    continue;
+                }
+                
+                // Case change or word change
+                if (i < originalTokens.length && j < fixedTokens.length && 
+                    /\S/.test(originalTokens[i]) && /\S/.test(fixedTokens[j])) {
+                    const startPos = document.positionAt(document.offsetAt(range.start) + currentPosition);
+                    const endPos = document.positionAt(document.offsetAt(range.start) + currentPosition + originalTokens[i].length);
+                    
+                    if (originalTokens[i] !== fixedTokens[j]) {
+                        edits.push({
+                            original: originalTokens[i],
+                            suggestion: `Change "${originalTokens[i]}" to "${fixedTokens[j]}"`,
+                            replacement: fixedTokens[j],
+                            range: new vscode.Range(startPos, endPos)
+                        });
+                    }
+                    
+                    currentPosition += originalTokens[i].length;
+                    if (i + 1 < originalTokens.length && /^\s+$/.test(originalTokens[i + 1])) {
+                        currentPosition += originalTokens[i + 1].length;
+                        i += 2;
+                    } else {
+                        i++;
+                    }
+                    if (j + 1 < fixedTokens.length && /^\s+$/.test(fixedTokens[j + 1])) {
+                        j += 2;
+                    } else {
+                        j++;
+                    }
+                    continue;
+                }
+                
+                // Insertion (new word in fixed that's not in original)
+                if (j < fixedTokens.length && (!originalTokens[i] || 
+                    (i < originalTokens.length && /\S/.test(fixedTokens[j]) && /^\s+$/.test(originalTokens[i])))) {
+                    const startPos = document.positionAt(document.offsetAt(range.start) + currentPosition);
+                    const endPos = startPos;
+                    
+                    edits.push({
+                        original: '',
+                        suggestion: `Insert "${fixedTokens[j]}"`,
+                        replacement: fixedTokens[j] + (j + 1 < fixedTokens.length && /^\s+$/.test(fixedTokens[j + 1]) ? fixedTokens[j + 1] : ''),
+                        range: new vscode.Range(startPos, endPos)
+                    });
+                    
+                    if (j + 1 < fixedTokens.length && /^\s+$/.test(fixedTokens[j + 1])) {
+                        j += 2;
+                    } else {
+                        j++;
+                    }
+                    continue;
+                }
+                
+                // Deletion (word in original that's not in fixed)
+                if (i < originalTokens.length && /\S/.test(originalTokens[i])) {
+                    const startPos = document.positionAt(document.offsetAt(range.start) + currentPosition);
+                    const endPos = document.positionAt(document.offsetAt(range.start) + currentPosition + originalTokens[i].length);
+                    
+                    edits.push({
+                        original: originalTokens[i],
+                        suggestion: `Remove "${originalTokens[i]}"`,
+                        replacement: '',
+                        range: new vscode.Range(startPos, endPos)
+                    });
+                    
+                    currentPosition += originalTokens[i].length;
+                    if (i + 1 < originalTokens.length && /^\s+$/.test(originalTokens[i + 1])) {
+                        currentPosition += originalTokens[i + 1].length;
+                        i += 2;
+                    } else {
+                        i++;
+                    }
+                    continue;
+                }
+                
+                // Move past any remaining whitespace
+                if (i < originalTokens.length && /^\s+$/.test(originalTokens[i])) {
+                    currentPosition += originalTokens[i].length;
+                    i++;
+                }
+                if (j < fixedTokens.length && /^\s+$/.test(fixedTokens[j])) {
+                    j++;
+                }
             }
             
-            // Calculate start and end positions
-            const startPos = document.positionAt(document.offsetAt(range.start) + startIndex);
-            const endPos = document.positionAt(document.offsetAt(range.start) + startIndex + original.length);
+            console.log('Generated edits:', edits);
+            return edits;
             
-            return {
-                original,
-                suggestion: `Change "${original}" to "${replacement}"`,
-                replacement,
-                range: new vscode.Range(startPos, endPos)
-            };
-        })
-        .filter((edit): edit is NonNullable<typeof edit> => 
-            edit !== null && 
-            edit.original !== edit.replacement
-        );
+        } catch (error) {
+            console.error('Error parsing LLM response:', error, '\nRaw result:', result);
+            return [];
+        }
     }
-
+    
     // Register code action provider
     const codeActionProvider = vscode.languages.registerCodeActionsProvider(
         { scheme: 'file', language: '*' }, // specify scheme and language
